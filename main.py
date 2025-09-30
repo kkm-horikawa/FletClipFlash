@@ -568,13 +568,16 @@ def main(page: ft.Page):
         def start_recording(e):
             """ホットキー記録開始"""
             if recording["active"]:
+                # 停止ボタンとして機能
+                stop_recording()
                 return
 
             recording["active"] = True
             recording["keys"] = set()
+            recording["last_key"] = None
             hotkey_display.value = "キーを押してください..."
             hotkey_display.border_color = ft.Colors.RED_400
-            record_button.text = "停止"
+            record_button.text = "完了"
             page.update()
 
             # キーボードイベントをキャプチャ
@@ -599,20 +602,36 @@ def main(page: ft.Page):
                 }
 
                 if key_name in modifier_map:
+                    # 修飾キーを追加
                     recording["keys"].add(modifier_map[key_name])
-                    # 現在の組み合わせを表示
-                    if recording["keys"]:
-                        hotkey_display.value = "+".join(sorted(recording["keys"]))
-                        page.update()
-                elif len(key_name) == 1 or key_name in ["space", "tab", "esc", "backspace"] or key_name.startswith("f") and key_name[1:].isdigit():
-                    # 通常のキーが押された場合、記録終了
-                    if key_name == "esc":
-                        # ESCでキャンセル
-                        stop_recording(None)
-                    else:
+                else:
+                    # 通常キーを記録（修飾キーが押されているかチェック）
+                    has_modifier = any(k in recording["keys"] for k in ["ctrl", "shift", "alt", "win"])
+
+                    if has_modifier:
+                        # 修飾キー + 通常キーの組み合わせ
+                        # 既存の通常キーを削除して新しいキーを追加
+                        recording["keys"] = {k for k in recording["keys"] if k in ["ctrl", "shift", "alt", "win"]}
                         recording["keys"].add(key_name)
-                        stop_recording()
-                    return False
+                        recording["last_key"] = key_name
+                    else:
+                        # 修飾キーなしの場合は無視（または警告）
+                        hotkey_display.value = "修飾キー（Ctrl/Shift/Alt/Win）を含めてください"
+                        page.update()
+                        return False
+
+                # 現在の組み合わせを表示
+                if recording["keys"]:
+                    # 修飾キーと通常キーを分離
+                    modifiers = [k for k in recording["keys"] if k in ["ctrl", "shift", "alt", "win"]]
+                    normal_key = [k for k in recording["keys"] if k not in ["ctrl", "shift", "alt", "win"]]
+
+                    # 順序を統一
+                    order = ["ctrl", "shift", "alt", "win"]
+                    sorted_keys = [m for m in order if m in modifiers] + normal_key
+
+                    hotkey_display.value = "+".join(sorted_keys)
+                    page.update()
 
                 return False  # イベントを通過させる
 
@@ -724,7 +743,7 @@ def main(page: ft.Page):
                         record_button,
                     ], spacing=10),
                     ft.Text(
-                        "※「記録」ボタンを押して、キーを組み合わせて入力\n  ESCキーでキャンセル",
+                        "※「記録」ボタンを押して、Ctrl/Shift/Altなどを押しながらキーを入力\n  例: Ctrl+Q、Ctrl+Alt+2\n  「完了」ボタンで確定",
                         size=10,
                         color=ft.Colors.GREY_500,
                     ),
