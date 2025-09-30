@@ -232,7 +232,7 @@ def main(page: ft.Page):
                 content=ft.Container(
                     content=ft.Column([
                         ft.Text(display_text, size=14, weight=ft.FontWeight.W_400),
-                        ft.Text(time_str, size=10, color=ft.colors.GREY_500),
+                        ft.Text(time_str, size=10, color=ft.Colors.GREY_500),
                     ], spacing=5),
                     padding=15,
                     on_click=on_click,
