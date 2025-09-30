@@ -1,0 +1,13 @@
+[project]
+name = "fletclipflash"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flet>=0.28.3",
+    "keyboard>=0.13.5",
+    "pillow>=11.3.0",
+    "pyperclip>=1.11.0",
+    "pystray>=0.19.5",
+]
