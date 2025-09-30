@@ -11,6 +11,30 @@ import pystray
 from PIL import Image, ImageDraw
 
 
+class FavoriteItem:
+    """お気に入りアイテム"""
+
+    def __init__(self, text: str, hotkey: str = "", label: str = ""):
+        self.text = text
+        self.hotkey = hotkey
+        self.label = label or text[:20]
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "hotkey": self.hotkey,
+            "label": self.label
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> 'FavoriteItem':
+        return FavoriteItem(
+            text=data.get("text", ""),
+            hotkey=data.get("hotkey", ""),
+            label=data.get("label", "")
+        )
+
+
 class Settings:
     """設定を管理するクラス"""
 
@@ -18,6 +42,7 @@ class Settings:
         self.config_file = "config.json"
         self.hotkey = "ctrl+shift+v"
         self.max_history = 100
+        self.favorites: List[FavoriteItem] = []
         self.load_settings()
 
     def load_settings(self):
@@ -28,6 +53,8 @@ class Settings:
                     config = json.load(f)
                     self.hotkey = config.get("hotkey", "ctrl+shift+v")
                     self.max_history = config.get("max_history", 100)
+                    favorites_data = config.get("favorites", [])
+                    self.favorites = [FavoriteItem.from_dict(item) for item in favorites_data]
         except Exception as e:
             print(f"設定読み込みエラー: {e}")
 
@@ -36,7 +63,8 @@ class Settings:
         try:
             config = {
                 "hotkey": self.hotkey,
-                "max_history": self.max_history
+                "max_history": self.max_history,
+                "favorites": [item.to_dict() for item in self.favorites]
             }
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -150,6 +178,41 @@ class ClipboardMonitor:
             time.sleep(0.5)  # 0.5秒ごとにチェック
 
 
+class FavoriteHotkeyManager:
+    """お気に入りアイテム用のホットキー管理"""
+
+    def __init__(self):
+        self.registered_hotkeys: dict = {}  # {hotkey: callback}
+
+    def register_favorite(self, hotkey: str, callback):
+        """お気に入り用ホットキーを登録"""
+        if hotkey in self.registered_hotkeys:
+            self.unregister_favorite(hotkey)
+
+        try:
+            keyboard.add_hotkey(hotkey, callback)
+            self.registered_hotkeys[hotkey] = callback
+            print(f"お気に入りホットキー登録: {hotkey}")
+        except Exception as e:
+            print(f"お気に入りホットキー登録エラー ({hotkey}): {e}")
+
+    def unregister_favorite(self, hotkey: str):
+        """お気に入り用ホットキーを解除"""
+        if hotkey not in self.registered_hotkeys:
+            return
+
+        try:
+            keyboard.remove_hotkey(hotkey)
+            del self.registered_hotkeys[hotkey]
+        except Exception as e:
+            print(f"お気に入りホットキー解除エラー ({hotkey}): {e}")
+
+    def unregister_all(self):
+        """すべてのお気に入りホットキーを解除"""
+        for hotkey in list(self.registered_hotkeys.keys()):
+            self.unregister_favorite(hotkey)
+
+
 class HotkeyManager:
     """グローバルホットキーを管理するクラス"""
 
@@ -236,7 +299,16 @@ def main(page: ft.Page):
     # クリップボード履歴管理
     clipboard_history = ClipboardHistory(max_history=settings.max_history)
 
+    # お気に入りホットキー管理
+    favorite_hotkey_manager = FavoriteHotkeyManager()
+
     # UI要素
+    tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=300,
+        expand=True,
+    )
+
     search_field = ft.TextField(
         label="検索",
         hint_text="履歴を検索...",
@@ -336,6 +408,7 @@ def main(page: ft.Page):
         """アプリケーションを終了"""
         monitor.stop()
         hotkey_manager.unregister()
+        favorite_hotkey_manager.unregister_all()
         tray_manager.stop()
         page.window.destroy()
 
@@ -359,6 +432,296 @@ def main(page: ft.Page):
 
     page.window.on_event = on_window_event
     page.window.prevent_close = True
+
+    # お気に入りリスト
+    favorites_list = ft.ListView(
+        spacing=5,
+        padding=10,
+        expand=True,
+    )
+
+    def copy_to_clipboard_with_paste(text: str):
+        """クリップボードにコピーして自動貼り付け"""
+        pyperclip.copy(text)
+        # Ctrl+Vをシミュレート
+        time.sleep(0.1)
+        keyboard.press_and_release('ctrl+v')
+
+    def update_favorites_list():
+        """お気に入りリストを更新"""
+        favorites_list.controls.clear()
+
+        for idx, fav in enumerate(settings.favorites):
+            def on_fav_click(e, text=fav.text):
+                """お気に入りクリック時"""
+                copy_to_clipboard_with_paste(text)
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text("コピー＆ペーストしました"),
+                    duration=1000,
+                )
+                page.snack_bar.open = True
+                hide_window()
+                page.update()
+
+            def on_delete_fav(e, index=idx):
+                """お気に入り削除"""
+                if 0 <= index < len(settings.favorites):
+                    deleted_fav = settings.favorites[index]
+                    # ホットキー解除
+                    if deleted_fav.hotkey:
+                        favorite_hotkey_manager.unregister_favorite(deleted_fav.hotkey)
+                    # リストから削除
+                    settings.favorites.pop(index)
+                    settings.save_settings()
+                    update_favorites_list()
+
+            def on_edit_fav(e, index=idx):
+                """お気に入り編集"""
+                edit_favorite_dialog(index)
+
+            card = ft.Card(
+                content=ft.Container(
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Text(fav.label, size=14, weight=ft.FontWeight.W_500),
+                            ft.Text(
+                                fav.text[:50] + ("..." if len(fav.text) > 50 else ""),
+                                size=12,
+                                color=ft.Colors.GREY_600
+                            ),
+                            ft.Text(
+                                f"ショートカット: {fav.hotkey}" if fav.hotkey else "ショートカット: 未設定",
+                                size=10,
+                                color=ft.Colors.BLUE_400 if fav.hotkey else ft.Colors.GREY_400
+                            ),
+                        ], expand=True, spacing=3),
+                        ft.Row([
+                            ft.IconButton(
+                                icon=ft.Icons.EDIT,
+                                icon_size=20,
+                                tooltip="編集",
+                                on_click=on_edit_fav,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE,
+                                icon_size=20,
+                                tooltip="削除",
+                                on_click=on_delete_fav,
+                            ),
+                        ], spacing=0),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    padding=12,
+                    on_click=on_fav_click,
+                ),
+            )
+
+            favorites_list.controls.append(card)
+
+        page.update()
+
+    def register_all_favorite_hotkeys():
+        """すべてのお気に入りホットキーを登録"""
+        for fav in settings.favorites:
+            if fav.hotkey:
+                def make_callback(text):
+                    return lambda: copy_to_clipboard_with_paste(text)
+                favorite_hotkey_manager.register_favorite(fav.hotkey, make_callback(fav.text))
+
+    def edit_favorite_dialog(index: Optional[int] = None):
+        """お気に入り編集ダイアログ"""
+        is_new = index is None
+        fav = None if is_new else settings.favorites[index]
+
+        label_field = ft.TextField(
+            label="ラベル",
+            value=fav.label if fav else "",
+            hint_text="例: メールアドレス、パスワード",
+        )
+
+        text_field = ft.TextField(
+            label="テキスト",
+            value=fav.text if fav else "",
+            multiline=True,
+            min_lines=3,
+            max_lines=5,
+        )
+
+        # ホットキー入力用の状態管理
+        recording = {"active": False, "keys": set()}
+
+        hotkey_display = ft.TextField(
+            label="ショートカットキー（任意）",
+            value=fav.hotkey if fav else "",
+            hint_text="クリックしてキーを押してください",
+            read_only=True,
+            border_color=ft.Colors.BLUE_200,
+        )
+
+        record_button = ft.ElevatedButton(
+            "記録",
+            icon=ft.Icons.KEYBOARD,
+            on_click=None,  # 後で設定
+        )
+
+        def start_recording(e):
+            """ホットキー記録開始"""
+            recording["active"] = True
+            recording["keys"] = set()
+            hotkey_display.value = "キーを押してください..."
+            hotkey_display.border_color = ft.Colors.RED_400
+            record_button.text = "記録中..."
+            record_button.disabled = True
+            page.update()
+
+            # キーボードイベントをキャプチャ
+            def on_key_event(event):
+                if not recording["active"]:
+                    return
+
+                # 修飾キーと通常キーを記録
+                key_name = event.name.lower()
+
+                # 修飾キーのマッピング
+                modifier_map = {
+                    "ctrl": "ctrl",
+                    "control": "ctrl",
+                    "shift": "shift",
+                    "alt": "alt",
+                    "windows": "win",
+                    "win": "win",
+                }
+
+                if key_name in modifier_map:
+                    recording["keys"].add(modifier_map[key_name])
+                elif len(key_name) == 1 or key_name in ["space", "tab", "enter", "esc", "backspace"]:
+                    # 通常のキーが押された場合、記録終了
+                    recording["keys"].add(key_name)
+                    stop_recording(event.name)
+                    return
+
+                # 現在の組み合わせを表示
+                if recording["keys"]:
+                    hotkey_display.value = "+".join(sorted(recording["keys"]))
+                    page.update()
+
+            # キーボードフックを登録
+            keyboard.hook(on_key_event)
+
+            # 5秒後に自動停止
+            def auto_stop():
+                time.sleep(5)
+                if recording["active"]:
+                    stop_recording()
+
+            threading.Thread(target=auto_stop, daemon=True).start()
+
+        def stop_recording(final_key=None):
+            """ホットキー記録停止"""
+            recording["active"] = False
+            keyboard.unhook_all()
+
+            if recording["keys"]:
+                # 修飾キーの順序を統一
+                modifiers = []
+                key = None
+
+                for k in recording["keys"]:
+                    if k in ["ctrl", "shift", "alt", "win"]:
+                        modifiers.append(k)
+                    else:
+                        key = k
+
+                # ctrl, shift, alt, winの順に並べる
+                order = ["ctrl", "shift", "alt", "win"]
+                sorted_modifiers = [m for m in order if m in modifiers]
+
+                if key:
+                    sorted_modifiers.append(key)
+
+                hotkey_str = "+".join(sorted_modifiers)
+                hotkey_display.value = hotkey_str
+            else:
+                hotkey_display.value = fav.hotkey if fav else ""
+
+            hotkey_display.border_color = ft.Colors.BLUE_200
+            record_button.text = "記録"
+            record_button.disabled = False
+            page.update()
+
+        record_button.on_click = start_recording
+
+        def save_favorite(e):
+            """お気に入りを保存"""
+            label = label_field.value.strip()
+            text = text_field.value.strip()
+            hotkey = hotkey_display.value.strip()
+
+            if not text:
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text("テキストを入力してください"),
+                    duration=2000,
+                )
+                page.snack_bar.open = True
+                page.update()
+                return
+
+            # 既存のホットキーを解除
+            if not is_new and fav.hotkey:
+                favorite_hotkey_manager.unregister_favorite(fav.hotkey)
+
+            new_fav = FavoriteItem(text=text, hotkey=hotkey, label=label or text[:20])
+
+            if is_new:
+                settings.favorites.append(new_fav)
+            else:
+                settings.favorites[index] = new_fav
+
+            settings.save_settings()
+
+            # 新しいホットキーを登録
+            if hotkey:
+                def make_callback(t):
+                    return lambda: copy_to_clipboard_with_paste(t)
+                favorite_hotkey_manager.register_favorite(hotkey, make_callback(text))
+
+            update_favorites_list()
+            fav_dialog.open = False
+            page.update()
+
+        def close_fav_dialog(e):
+            fav_dialog.open = False
+            page.update()
+
+        fav_dialog = ft.AlertDialog(
+            title=ft.Text("お気に入りを編集" if not is_new else "お気に入りを追加"),
+            content=ft.Column([
+                label_field,
+                text_field,
+                ft.Row([
+                    hotkey_display,
+                    record_button,
+                ], spacing=10),
+                ft.Text(
+                    "※「記録」ボタンを押してキーの組み合わせを入力してください",
+                    size=10,
+                    color=ft.Colors.GREY_500,
+                ),
+            ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ft.TextButton("キャンセル", on_click=close_fav_dialog),
+                ft.ElevatedButton("保存", on_click=save_favorite),
+            ],
+        )
+
+        page.overlay.append(fav_dialog)
+        fav_dialog.open = True
+        page.update()
+
+    def add_favorite_from_history(text: str):
+        """履歴からお気に入りに追加"""
+        edit_favorite_dialog()
+        # ダイアログが開いた後、テキストフィールドに値を設定
+        # (この実装は簡略化のため省略。必要に応じて実装可能)
 
     # 設定ダイアログ
     hotkey_input = ft.TextField(
@@ -425,7 +788,7 @@ def main(page: ft.Page):
 
     # ヘッダー
     header = ft.Row([
-        ft.Text("クリップボード履歴", size=24, weight=ft.FontWeight.BOLD),
+        ft.Text("FletClipFlash", size=24, weight=ft.FontWeight.BOLD),
         ft.Row([
             ft.IconButton(
                 icon=ft.Icons.SETTINGS,
@@ -440,17 +803,62 @@ def main(page: ft.Page):
         ]),
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
+    # タブ切り替え
+    def on_tab_change(e):
+        """タブ変更時"""
+        if tabs.selected_index == 1:  # お気に入りタブ
+            update_favorites_list()
+        page.update()
+
+    tabs.on_change = on_tab_change
+
+    # タブコンテンツ
+    history_tab = ft.Tab(
+        text="履歴",
+        icon=ft.Icons.HISTORY,
+        content=ft.Container(
+            content=ft.Column([
+                search_field,
+                history_list,
+            ], expand=True, spacing=10),
+            padding=ft.padding.only(top=10),
+        ),
+    )
+
+    favorites_header = ft.Row([
+        ft.Text("お気に入り", size=18, weight=ft.FontWeight.BOLD),
+        ft.IconButton(
+            icon=ft.Icons.ADD,
+            tooltip="お気に入りを追加",
+            on_click=lambda e: edit_favorite_dialog(),
+        ),
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+
+    favorites_tab = ft.Tab(
+        text="お気に入り",
+        icon=ft.Icons.STAR,
+        content=ft.Container(
+            content=ft.Column([
+                favorites_header,
+                favorites_list,
+            ], expand=True, spacing=10),
+            padding=ft.padding.only(top=10),
+        ),
+    )
+
+    tabs.tabs = [history_tab, favorites_tab]
+
     # レイアウト
     page.add(
         ft.Column([
             header,
-            search_field,
-            history_list,
+            tabs,
         ], expand=True, spacing=10)
     )
 
     # 初期表示
     update_history_list()
+    register_all_favorite_hotkeys()
 
 
 if __name__ == "__main__":
