@@ -11,6 +11,39 @@ import pystray
 from PIL import Image, ImageDraw
 
 
+class Settings:
+    """設定を管理するクラス"""
+
+    def __init__(self):
+        self.config_file = "config.json"
+        self.hotkey = "ctrl+shift+v"
+        self.max_history = 100
+        self.load_settings()
+
+    def load_settings(self):
+        """設定をファイルから読み込み"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    self.hotkey = config.get("hotkey", "ctrl+shift+v")
+                    self.max_history = config.get("max_history", 100)
+        except Exception as e:
+            print(f"設定読み込みエラー: {e}")
+
+    def save_settings(self):
+        """設定をファイルに保存"""
+        try:
+            config = {
+                "hotkey": self.hotkey,
+                "max_history": self.max_history
+            }
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"設定保存エラー: {e}")
+
+
 class ClipboardHistory:
     """クリップボード履歴を管理するクラス"""
 
@@ -120,24 +153,35 @@ class ClipboardMonitor:
 class HotkeyManager:
     """グローバルホットキーを管理するクラス"""
 
-    def __init__(self, callback):
+    def __init__(self, callback, hotkey: str = "ctrl+shift+v"):
         self.callback = callback
-        self.hotkey = "ctrl+shift+v"  # デフォルトホットキー
+        self.hotkey = hotkey
+        self.registered = False
 
     def register(self):
         """ホットキーを登録"""
         try:
             keyboard.add_hotkey(self.hotkey, self.callback)
+            self.registered = True
             print(f"ホットキー登録: {self.hotkey}")
         except Exception as e:
             print(f"ホットキー登録エラー: {e}")
 
     def unregister(self):
         """ホットキーを解除"""
+        if not self.registered:
+            return
         try:
             keyboard.remove_hotkey(self.hotkey)
+            self.registered = False
         except Exception as e:
             print(f"ホットキー解除エラー: {e}")
+
+    def change_hotkey(self, new_hotkey: str):
+        """ホットキーを変更"""
+        self.unregister()
+        self.hotkey = new_hotkey
+        self.register()
 
 
 class SystemTrayManager:
@@ -186,8 +230,11 @@ def main(page: ft.Page):
     page.window.skip_task_bar = False
     page.padding = 20
 
+    # 設定管理
+    settings = Settings()
+
     # クリップボード履歴管理
-    clipboard_history = ClipboardHistory(max_history=100)
+    clipboard_history = ClipboardHistory(max_history=settings.max_history)
 
     # UI要素
     search_field = ft.TextField(
@@ -299,8 +346,8 @@ def main(page: ft.Page):
     )
     tray_manager.start()
 
-    # グローバルホットキー設定 (Ctrl+Shift+V)
-    hotkey_manager = HotkeyManager(callback=toggle_window)
+    # グローバルホットキー設定
+    hotkey_manager = HotkeyManager(callback=toggle_window, hotkey=settings.hotkey)
     hotkey_manager.register()
 
     # ウィンドウイベント処理
@@ -313,14 +360,84 @@ def main(page: ft.Page):
     page.window.on_event = on_window_event
     page.window.prevent_close = True
 
+    # 設定ダイアログ
+    hotkey_input = ft.TextField(
+        label="ショートカットキー",
+        value=settings.hotkey,
+        hint_text="例: ctrl+shift+v, ctrl+alt+c",
+    )
+
+    def save_hotkey_settings(e):
+        """ホットキー設定を保存"""
+        new_hotkey = hotkey_input.value.strip()
+        if new_hotkey and new_hotkey != settings.hotkey:
+            try:
+                # 新しいホットキーを適用
+                hotkey_manager.change_hotkey(new_hotkey)
+                settings.hotkey = new_hotkey
+                settings.save_settings()
+
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text(f"ショートカットキーを {new_hotkey} に変更しました"),
+                    duration=2000,
+                )
+                page.snack_bar.open = True
+                settings_dialog.open = False
+                page.update()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text(f"エラー: {ex}"),
+                    duration=3000,
+                )
+                page.snack_bar.open = True
+                page.update()
+
+    def close_settings(e):
+        """設定ダイアログを閉じる"""
+        settings_dialog.open = False
+        page.update()
+
+    settings_dialog = ft.AlertDialog(
+        title=ft.Text("設定"),
+        content=ft.Column([
+            hotkey_input,
+            ft.Text(
+                "※ショートカットキーの書式:\n"
+                "  - 修飾キー: ctrl, shift, alt, win\n"
+                "  - 組み合わせ: + で繋ぐ\n"
+                "  - 例: ctrl+shift+v, ctrl+alt+h",
+                size=12,
+                color=ft.Colors.GREY_600,
+            ),
+        ], tight=True, spacing=10),
+        actions=[
+            ft.TextButton("キャンセル", on_click=close_settings),
+            ft.ElevatedButton("保存", on_click=save_hotkey_settings),
+        ],
+    )
+
+    def open_settings(e):
+        """設定ダイアログを開く"""
+        hotkey_input.value = settings.hotkey
+        page.overlay.append(settings_dialog)
+        settings_dialog.open = True
+        page.update()
+
     # ヘッダー
     header = ft.Row([
         ft.Text("クリップボード履歴", size=24, weight=ft.FontWeight.BOLD),
-        ft.IconButton(
-            icon=ft.Icons.DELETE_SWEEP,
-            tooltip="履歴をクリア",
-            on_click=on_clear_history,
-        ),
+        ft.Row([
+            ft.IconButton(
+                icon=ft.Icons.SETTINGS,
+                tooltip="設定",
+                on_click=open_settings,
+            ),
+            ft.IconButton(
+                icon=ft.Icons.DELETE_SWEEP,
+                tooltip="履歴をクリア",
+                on_click=on_clear_history,
+            ),
+        ]),
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
     # レイアウト
