@@ -552,31 +552,36 @@ def main(page: ft.Page):
         hotkey_display = ft.TextField(
             label="ショートカットキー（任意）",
             value=fav.hotkey if fav else "",
-            hint_text="クリックしてキーを押してください",
+            hint_text="「記録」ボタンを押してください",
             read_only=True,
             border_color=ft.Colors.BLUE_200,
+            expand=True,
         )
 
         record_button = ft.ElevatedButton(
             "記録",
             icon=ft.Icons.KEYBOARD,
             on_click=None,  # 後で設定
+            width=100,
         )
 
         def start_recording(e):
             """ホットキー記録開始"""
+            if recording["active"]:
+                return
+
             recording["active"] = True
             recording["keys"] = set()
             hotkey_display.value = "キーを押してください..."
             hotkey_display.border_color = ft.Colors.RED_400
-            record_button.text = "記録中..."
-            record_button.disabled = True
+            record_button.text = "停止"
             page.update()
 
             # キーボードイベントをキャプチャ
             def on_key_event(event):
                 if not recording["active"]:
-                    return
+                    keyboard.unhook(on_key_event)
+                    return False
 
                 # 修飾キーと通常キーを記録
                 key_name = event.name.lower()
@@ -587,40 +592,49 @@ def main(page: ft.Page):
                     "control": "ctrl",
                     "shift": "shift",
                     "alt": "alt",
+                    "alt gr": "alt",
+                    "left windows": "win",
+                    "right windows": "win",
                     "windows": "win",
-                    "win": "win",
                 }
 
                 if key_name in modifier_map:
                     recording["keys"].add(modifier_map[key_name])
-                elif len(key_name) == 1 or key_name in ["space", "tab", "enter", "esc", "backspace"]:
+                    # 現在の組み合わせを表示
+                    if recording["keys"]:
+                        hotkey_display.value = "+".join(sorted(recording["keys"]))
+                        page.update()
+                elif len(key_name) == 1 or key_name in ["space", "tab", "esc", "backspace"] or key_name.startswith("f") and key_name[1:].isdigit():
                     # 通常のキーが押された場合、記録終了
-                    recording["keys"].add(key_name)
-                    stop_recording(event.name)
-                    return
+                    if key_name == "esc":
+                        # ESCでキャンセル
+                        stop_recording(None)
+                    else:
+                        recording["keys"].add(key_name)
+                        stop_recording()
+                    return False
 
-                # 現在の組み合わせを表示
-                if recording["keys"]:
-                    hotkey_display.value = "+".join(sorted(recording["keys"]))
-                    page.update()
+                return False  # イベントを通過させる
 
             # キーボードフックを登録
-            keyboard.hook(on_key_event)
-
-            # 5秒後に自動停止
-            def auto_stop():
-                time.sleep(5)
-                if recording["active"]:
-                    stop_recording()
-
-            threading.Thread(target=auto_stop, daemon=True).start()
+            keyboard.on_press(on_key_event)
 
         def stop_recording(final_key=None):
             """ホットキー記録停止"""
-            recording["active"] = False
-            keyboard.unhook_all()
+            if not recording["active"]:
+                return
 
-            if recording["keys"]:
+            recording["active"] = False
+
+            try:
+                keyboard.unhook_all()
+            except:
+                pass
+
+            if final_key is None:
+                # キャンセルされた
+                hotkey_display.value = fav.hotkey if fav else ""
+            elif recording["keys"]:
                 # 修飾キーの順序を統一
                 modifiers = []
                 key = None
@@ -638,14 +652,16 @@ def main(page: ft.Page):
                 if key:
                     sorted_modifiers.append(key)
 
-                hotkey_str = "+".join(sorted_modifiers)
-                hotkey_display.value = hotkey_str
+                if sorted_modifiers:
+                    hotkey_str = "+".join(sorted_modifiers)
+                    hotkey_display.value = hotkey_str
+                else:
+                    hotkey_display.value = fav.hotkey if fav else ""
             else:
                 hotkey_display.value = fav.hotkey if fav else ""
 
             hotkey_display.border_color = ft.Colors.BLUE_200
             record_button.text = "記録"
-            record_button.disabled = False
             page.update()
 
         record_button.on_click = start_recording
@@ -689,28 +705,36 @@ def main(page: ft.Page):
             page.update()
 
         def close_fav_dialog(e):
+            # 記録中なら停止
+            if recording["active"]:
+                stop_recording(None)
             fav_dialog.open = False
             page.update()
 
         fav_dialog = ft.AlertDialog(
+            modal=True,
             title=ft.Text("お気に入りを編集" if not is_new else "お気に入りを追加"),
-            content=ft.Column([
-                label_field,
-                text_field,
-                ft.Row([
-                    hotkey_display,
-                    record_button,
-                ], spacing=10),
-                ft.Text(
-                    "※「記録」ボタンを押してキーの組み合わせを入力してください",
-                    size=10,
-                    color=ft.Colors.GREY_500,
-                ),
-            ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+            content=ft.Container(
+                width=500,
+                content=ft.Column([
+                    label_field,
+                    text_field,
+                    ft.Row([
+                        hotkey_display,
+                        record_button,
+                    ], spacing=10),
+                    ft.Text(
+                        "※「記録」ボタンを押して、キーを組み合わせて入力\n  ESCキーでキャンセル",
+                        size=10,
+                        color=ft.Colors.GREY_500,
+                    ),
+                ], spacing=10, scroll=ft.ScrollMode.AUTO),
+            ),
             actions=[
                 ft.TextButton("キャンセル", on_click=close_fav_dialog),
                 ft.ElevatedButton("保存", on_click=save_favorite),
             ],
+            actions_alignment=ft.MainAxisAlignment.END,
         )
 
         page.overlay.append(fav_dialog)
