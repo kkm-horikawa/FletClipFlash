@@ -193,7 +193,7 @@ def main(page: ft.Page):
     search_field = ft.TextField(
         label="検索",
         hint_text="履歴を検索...",
-        prefix_icon=ft.icons.SEARCH,
+        prefix_icon=ft.Icons.SEARCH,
         expand=True,
     )
 
@@ -317,7 +317,7 @@ def main(page: ft.Page):
     header = ft.Row([
         ft.Text("クリップボード履歴", size=24, weight=ft.FontWeight.BOLD),
         ft.IconButton(
-            icon=ft.icons.DELETE_SWEEP,
+            icon=ft.Icons.DELETE_SWEEP,
             tooltip="履歴をクリア",
             on_click=on_clear_history,
         ),
